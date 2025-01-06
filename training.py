@@ -9,7 +9,7 @@ import numpy as np
 
 
 
-def training_gym(env_name, algorithm, noise_std, gamma_avg, hidden_units, lr, device, log_simulation, seed, n_noisy_passes):
+def training_gym(env_name, algorithm, noise_std, gamma_avg, hidden_units, hidden_layers, lr, device, log_simulation, seed, n_noisy_passes):
 
     # Create environment
     env = gym.make(env_name)
@@ -22,13 +22,16 @@ def training_gym(env_name, algorithm, noise_std, gamma_avg, hidden_units, lr, de
     # Network params
     n_inputs = env.observation_space.shape[0]
     n_actions = env.action_space.n
-    net_structure = [n_inputs, hidden_units, n_actions]
+    net_structure = [n_inputs, n_actions]
+    for _ in range(hidden_layers):
+        net_structure.insert(1, hidden_units)
+    print('Net structure:', net_structure)
     act_func = leaky_relu(0.1)
     out_act_function = softmax()
 
 
     # Instantiate agents (clean or approx + noisy pass) and move to GPU
-    if algorithm == 'noisyNP':
+    if algorithm == 'noisy-ours':
         agents = [ANN(net_structure=net_structure, batch_size=1, act_func=act_func,
                     out_act_function=out_act_function, gamma_avg=gamma_avg, seed=42, device=device) for _ in range(n_noisy_passes)]
         _ = [agent.to(device) for agent in agents]
@@ -36,7 +39,7 @@ def training_gym(env_name, algorithm, noise_std, gamma_avg, hidden_units, lr, de
         agent = ANN(net_structure=net_structure, batch_size=1, act_func=act_func,
                     out_act_function=out_act_function, gamma_avg=gamma_avg, seed=42, device=device)
         _ = agent.to(device)
-    if algorithm == 'NP' or algorithm == 'noisyNP':
+    if algorithm == 'ours' or algorithm == 'noisy-ours':
         agent_noisy = ANN(net_structure=net_structure, batch_size=1, act_func=act_func,
                     out_act_function=out_act_function, gamma_avg=gamma_avg, seed=42, device=device)
         _ = agent_noisy.to(device)
@@ -65,7 +68,7 @@ def training_gym(env_name, algorithm, noise_std, gamma_avg, hidden_units, lr, de
             name = 'e'
         else:
             name = ''
-        name += str(algorithm)+'_units'+str(net_structure[1])+'_lr'+str(lr)
+        name += str(algorithm)+'_hl'+str(hidden_layers)+'_units'+str(net_structure[1])+'_lr'+str(lr)
         if algorithm != 'BP':
             name += '_noise'+str(noise_std)
         name += '_gamma'+str(gamma_avg)
@@ -93,7 +96,7 @@ def training_gym(env_name, algorithm, noise_std, gamma_avg, hidden_units, lr, de
         # Initial stuff
         total_reward=0
         state = env.reset()
-        if algorithm == 'noisyNP':
+        if algorithm == 'noisy-ours':
             [agent.reset_states() for agent in agents]
         else:
             agent.reset_states()
@@ -104,14 +107,14 @@ def training_gym(env_name, algorithm, noise_std, gamma_avg, hidden_units, lr, de
         e = [0 for _ in range(len(net_structure) - 1)]
 
         # If noisy+clean passes needed
-        if algorithm == 'NP':
+        if algorithm == 'ours':
             agent_noisy.reset_states()
 
         # Run simulation
         while not done:
 
             # Agent computes policy
-            if algorithm == 'noisyNP': # approximate clean pass with multiple noisy passes
+            if algorithm == 'noisy-ours': # approximate clean pass with multiple noisy passes
                 policy_passes, noises_passes = [], []
                 for agent in agents:
                     policy, noises = agent.forward(state, save_states=save_states, noise=noise, noise_std=noise_std)
@@ -119,7 +122,7 @@ def training_gym(env_name, algorithm, noise_std, gamma_avg, hidden_units, lr, de
                     noises_passes.append(noises)
             else:
                 policy, noises = agent.forward(state, save_states=save_states, noise=noise, noise_std=noise_std)
-            if algorithm == 'NP' or algorithm == 'noisyNP':
+            if algorithm == 'ours' or algorithm == 'noisy-ours':
                 policy_noisy, noises = agent_noisy.forward(state, save_states=save_states, noise=True, noise_std=noise_std)
             noises_hist.append(noises)
 
@@ -140,8 +143,8 @@ def training_gym(env_name, algorithm, noise_std, gamma_avg, hidden_units, lr, de
 
             ###---------- Elegibility trace ----------###
 
-            # NP-like
-            if algorithm == 'NP':
+            # ours
+            if algorithm == 'ours':
                 for indx in range(len(agent.net_structure) - 1):
                     pre_out = agent_noisy.x[indx]
                     if explicit_noise:
@@ -153,8 +156,8 @@ def training_gym(env_name, algorithm, noise_std, gamma_avg, hidden_units, lr, de
                     dp = torch.log(policy_noisy[action]) - torch.log(policy[action])
                     e[indx] = discount * e[indx] + dp * torch.outer(norm_noise, pre_out)
 
-            # noisyNP-like
-            if algorithm == 'noisyNP':
+            # noisy ours
+            if algorithm == 'noisy-ours':
                 for indx in range(len(agent.net_structure) - 1):
                     pre_out = agent_noisy.x[indx]
                     if explicit_noise:
@@ -216,21 +219,23 @@ def training_gym(env_name, algorithm, noise_std, gamma_avg, hidden_units, lr, de
                 agent.fwd_layers[indx].weight.data = agent.fwd_layers[indx].weight.data + lr * dW
 
 
-        # NP-like
-        elif algorithm == 'NP':
+        # ours
+        elif algorithm == 'ours':
             # Modulate eligibility trace with RPE
             for indx in range(len(agent.net_structure) - 1):
                 dW = RPE * e[indx]
-                agent.fwd_layers[indx].weight.data = agent.fwd_layers[indx].weight.data + lr * dW
+                # agent.fwd_layers[indx].weight.data = agent.fwd_layers[indx].weight.data + lr * dW
+                agent.fwd_layers[indx].weight.data = agent.fwd_layers[indx].weight.data + lr * agent.net_structure[indx+1] * dW
                 agent_noisy.fwd_layers[indx].weight.data = copy.deepcopy(agent.fwd_layers[indx].weight.data)
 
 
         # noisyNP-like
-        elif algorithm == 'noisyNP':
+        elif algorithm == 'noisy-ours':
             # Modulate eligibility trace with RPE
             for indx in range(len(agent.net_structure) - 1):
                 dW = RPE * e[indx]
-                agent_noisy.fwd_layers[indx].weight.data = agent_noisy.fwd_layers[indx].weight.data + lr * dW
+                # agent_noisy.fwd_layers[indx].weight.data = agent_noisy.fwd_layers[indx].weight.data + lr * dW
+                agent_noisy.fwd_layers[indx].weight.data = agent.fwd_layers[indx].weight.data + lr * agent.net_structure[indx+1] * dW
                 for i in range(n_noisy_passes):
                     agents[i].fwd_layers[indx].weight.data = copy.deepcopy(agent_noisy.fwd_layers[indx].weight.data)
 
@@ -258,7 +263,7 @@ def training_gym(env_name, algorithm, noise_std, gamma_avg, hidden_units, lr, de
 
 
 
-def training_neurogym(algorithm, noise_std, gamma_avg, hidden_units, lr, device, log_simulation, seed):
+def training_neurogym(algorithm, noise_std, gamma_avg, hidden_units, hidden_layers, lr, device, log_simulation, seed):
 
     # Create environment
     duration_stim = 3000
@@ -276,7 +281,9 @@ def training_neurogym(algorithm, noise_std, gamma_avg, hidden_units, lr, device,
     # Network params
     n_inputs = env.observation_space.shape[0]
     n_actions = env.action_space.n
-    net_structure = [n_inputs, hidden_units, n_actions]
+    net_structure = [n_inputs, n_actions]
+    for _ in range(hidden_layers):
+        net_structure.insert(1, hidden_units)
     act_func = leaky_relu(0.1)
     out_act_function = softmax()
 
@@ -285,14 +292,14 @@ def training_neurogym(algorithm, noise_std, gamma_avg, hidden_units, lr, device,
     agent = ANN(net_structure=net_structure, batch_size=1, act_func=act_func,
                 out_act_function=out_act_function, gamma_avg=gamma_avg, seed=42, device=device)
     _ = agent.to(device)
-    if algorithm == 'NP':
+    if algorithm == 'ours':
         agent_noisy = ANN(net_structure=net_structure, batch_size=1, act_func=act_func,
                     out_act_function=out_act_function, gamma_avg=gamma_avg, seed=42, device=device)
         _ = agent_noisy.to(device)
 
 
     # Simulation parameters
-    n_steps = 500000    
+    n_steps = 5000000 #500000    
     prob_actions = True
     explicit_noise = True
     if algorithm == 'BP':
@@ -307,7 +314,7 @@ def training_neurogym(algorithm, noise_std, gamma_avg, hidden_units, lr, device,
     if log_simulation:
         name = str(algorithm)+'_stim'+str(duration_stim)
         if algorithm != 'random':
-            name += '_gamma'+str(gamma_avg)+'_units'+str(net_structure[1])+'_lr'+str(lr)
+            name += '_gamma'+str(gamma_avg)+'_hl'+str(hidden_layers)+'_units'+str(net_structure[1])+'_lr'+str(lr)
         if algorithm != 'BP' and algorithm != 'random':
             name += '_noise'+str(noise_std)+'_gamma_avg'+str(gamma_avg)
         wandb.init(
@@ -327,7 +334,7 @@ def training_neurogym(algorithm, noise_std, gamma_avg, hidden_units, lr, device,
     rewards = []
     all_obs = [obs]
     agent.reset_states()
-    if algorithm == 'NP':
+    if algorithm == 'ours':
         agent_noisy.reset_states()
     reward_avg = None
 
@@ -338,7 +345,7 @@ def training_neurogym(algorithm, noise_std, gamma_avg, hidden_units, lr, device,
 
         # Actor chooses action based on its policy
         policy, noises = agent.forward(obs, save_states=False, noise=noise, noise_std=noise_std)
-        if algorithm == 'NP':
+        if algorithm == 'ours':
             policy_noisy, noises = agent_noisy.forward(obs, save_states=False, noise=True, noise_std=noise_std)
         if prob_actions:
             action = int(torch.multinomial(policy, 1)) # Probabilistic choice of actions
@@ -390,14 +397,15 @@ def training_neurogym(algorithm, noise_std, gamma_avg, hidden_units, lr, device,
                     dW = (reward - reward_avg) * torch.outer(torch.squeeze(post_act-post_act_avg), pre_out)
                 agent.fwd_layers[indx].weight.data = agent.fwd_layers[indx].weight.data + lr * dW
 
-        # NP-like
-        elif algorithm == 'NP':
+        # ours
+        elif algorithm == 'ours':
             for indx in range(len(agent.net_structure) - 1):
                 pre_out = agent.x[indx]
                 norm_noise = noises[indx] / (torch.norm(noises[indx], 'fro')**2)
                 dp = torch.log(policy_noisy[action]) - torch.log(policy[action])
                 dW = RPE * dp * torch.outer(norm_noise, pre_out)
                 agent.fwd_layers[indx].weight.data = agent.fwd_layers[indx].weight.data + lr * dW
+                # agent.fwd_layers[indx].weight.data = agent.fwd_layers[indx].weight.data + lr * agent.net_structure[indx+1] * dW
                 agent_noisy.fwd_layers[indx].weight.data = copy.deepcopy(agent.fwd_layers[indx].weight.data)
 
 
@@ -413,7 +421,7 @@ def training_neurogym(algorithm, noise_std, gamma_avg, hidden_units, lr, device,
             trial += 1
             reward_avg = None
             agent.reset_states()
-            if algorithm == 'NP':
+            if algorithm == 'ours':
                 agent_noisy.reset_states()
             print("[Trial "+str(trial)+"/"+str(n_trials)+"] Total reward:", total_reward_per_trial[-1])
             if log_simulation:
