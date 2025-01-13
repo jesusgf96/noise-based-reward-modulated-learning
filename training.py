@@ -224,8 +224,8 @@ def training_gym(env_name, algorithm, noise_std, gamma_avg, hidden_units, hidden
             # Modulate eligibility trace with RPE
             for indx in range(len(agent.net_structure) - 1):
                 dW = RPE * e[indx]
-                # agent.fwd_layers[indx].weight.data = agent.fwd_layers[indx].weight.data + lr * dW
-                agent.fwd_layers[indx].weight.data = agent.fwd_layers[indx].weight.data + lr * agent.net_structure[indx+1] * dW
+                agent.fwd_layers[indx].weight.data = agent.fwd_layers[indx].weight.data + lr * dW
+                # agent.fwd_layers[indx].weight.data = agent.fwd_layers[indx].weight.data + lr * agent.net_structure[indx+1] * dW
                 agent_noisy.fwd_layers[indx].weight.data = copy.deepcopy(agent.fwd_layers[indx].weight.data)
 
 
@@ -234,8 +234,8 @@ def training_gym(env_name, algorithm, noise_std, gamma_avg, hidden_units, hidden
             # Modulate eligibility trace with RPE
             for indx in range(len(agent.net_structure) - 1):
                 dW = RPE * e[indx]
-                # agent_noisy.fwd_layers[indx].weight.data = agent_noisy.fwd_layers[indx].weight.data + lr * dW
-                agent_noisy.fwd_layers[indx].weight.data = agent.fwd_layers[indx].weight.data + lr * agent.net_structure[indx+1] * dW
+                agent_noisy.fwd_layers[indx].weight.data = agent_noisy.fwd_layers[indx].weight.data + lr * dW
+                # agent_noisy.fwd_layers[indx].weight.data = agent.fwd_layers[indx].weight.data + lr * agent.net_structure[indx+1] * dW
                 for i in range(n_noisy_passes):
                     agents[i].fwd_layers[indx].weight.data = copy.deepcopy(agent_noisy.fwd_layers[indx].weight.data)
 
