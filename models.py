@@ -75,7 +75,6 @@ class ANN(nn.Module):
         # Iterating hidden layers
         for indx in range(len(self.net_structure) - 2):
             self.a[indx+1] = self.x[indx] @ self.fwd_layers[indx].weight.transpose(0, 1)
-            #NAS: should the next line not be after noise addition?
             self.a_avg[indx+1] = self.a_avg[indx+1] + self.gamma_avg * (self.a[indx+1] - self.a_avg[indx+1])
             if noise:
                 noises.append(torch.randn_like(self.a[indx+1], device=self.device) * noise_std)
